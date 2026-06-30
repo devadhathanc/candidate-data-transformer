@@ -40,6 +40,7 @@ class Provenance(BaseModel):
     field: str
     source: str
     method: str
+    confidence: float = 0.0
 
 
 class CanonicalProfile(BaseModel):
