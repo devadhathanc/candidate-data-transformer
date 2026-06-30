@@ -53,8 +53,163 @@ class NormalizationEngine:
         result["phones"] = self._normalize_phones(result.get("phones", []))
         result["skills"] = self._normalize_skills(result.get("skills", []))
         result["experience"] = self._normalize_experience_dates(result.get("experience", []))
+        result["experience"] = self._strip_experience_markdown(result.get("experience", []))
         result["education"] = self._normalize_education_dates(result.get("education", []))
+        result["location"] = self._normalize_location(result.get("location"))
+        # Strip markdown from headline
+        if isinstance(result.get("headline"), str):
+            result["headline"] = self._strip_markdown(result["headline"])
+        # Compute years_experience from merged overlapping intervals
+        computed_ye = self._compute_years_experience(result.get("experience", []))
+        if computed_ye is not None:
+            result["years_experience"] = computed_ye
         return result
+
+    # ------------------------------------------------------------------
+    # Markdown / escaped character stripping
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _strip_markdown(text: str) -> str:
+        """Remove common markdown syntax and escaped characters from text."""
+        if not text:
+            return text
+        # Remove markdown bold/italic markers
+        text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
+        text = re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", text)
+        # Remove markdown headings
+        text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+        # Remove markdown links [text](url) → text
+        text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+        # Remove inline code backticks
+        text = re.sub(r"`([^`]+)`", r"\1", text)
+        # Remove common escape sequences
+        text = text.replace("\\n", " ").replace("\\t", " ").replace("\\r", "")
+        text = re.sub(r"\\([*_~`#])", r"\1", text)
+        # Collapse multiple spaces
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    @staticmethod
+    def _strip_experience_markdown(experiences: list[dict]) -> list[dict]:
+        """Strip markdown from experience title and summary fields."""
+        result: list[dict] = []
+        for exp in experiences:
+            if not isinstance(exp, dict):
+                continue
+            entry = dict(exp)
+            if isinstance(entry.get("title"), str):
+                entry["title"] = NormalizationEngine._strip_markdown(entry["title"])
+            if isinstance(entry.get("summary"), str):
+                entry["summary"] = NormalizationEngine._strip_markdown(entry["summary"])
+            result.append(entry)
+        return result
+
+    # ------------------------------------------------------------------
+    # Location — ISO-3166 alpha-2 country codes
+    # ------------------------------------------------------------------
+    _COUNTRY_MAP: dict[str, str] = {
+        "united states": "US", "usa": "US", "u.s.a.": "US", "u.s.": "US",
+        "united kingdom": "GB", "uk": "GB", "great britain": "GB",
+        "india": "IN", "canada": "CA", "australia": "AU",
+        "germany": "DE", "france": "FR", "japan": "JP",
+        "china": "CN", "brazil": "BR", "mexico": "MX",
+        "south korea": "KR", "korea": "KR",
+        "spain": "ES", "italy": "IT", "netherlands": "NL",
+        "sweden": "SE", "norway": "NO", "denmark": "DK",
+        "finland": "FI", "switzerland": "CH", "austria": "AT",
+        "ireland": "IE", "new zealand": "NZ", "singapore": "SG",
+        "israel": "IL", "poland": "PL", "belgium": "BE",
+        "portugal": "PT", "russia": "RU", "south africa": "ZA",
+        "argentina": "AR", "chile": "CL", "colombia": "CO",
+        "indonesia": "ID", "malaysia": "MY", "philippines": "PH",
+        "thailand": "TH", "vietnam": "VN", "egypt": "EG",
+        "nigeria": "NG", "kenya": "KE", "uae": "AE",
+        "united arab emirates": "AE", "saudi arabia": "SA",
+        "taiwan": "TW", "hong kong": "HK", "pakistan": "PK",
+        "bangladesh": "BD", "sri lanka": "LK", "nepal": "NP",
+    }
+
+    def _normalize_location(self, location: Any) -> Any:
+        if not isinstance(location, dict):
+            return location
+        result = dict(location)
+        country = result.get("country")
+        if isinstance(country, str):
+            # If already a 2-letter code, keep it
+            if len(country.strip()) == 2 and country.strip().isalpha():
+                result["country"] = country.strip().upper()
+            else:
+                mapped = self._COUNTRY_MAP.get(country.strip().lower())
+                if mapped:
+                    result["country"] = mapped
+        return result
+
+    # ------------------------------------------------------------------
+    # years_experience — merge overlapping date intervals
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _compute_years_experience(experiences: list[dict]) -> Optional[float]:
+        """Compute years of experience by merging overlapping date intervals.
+
+        Parses start/end dates from experience entries, merges overlapping or
+        adjacent intervals into union ranges (to avoid double-counting concurrent
+        roles), then sums total duration. Returns None if no valid intervals found.
+        """
+        intervals: list[tuple[int, int]] = []  # (start_month, end_month) as absolute months
+
+        for exp in experiences:
+            start = exp.get("start")
+            end = exp.get("end")
+            if not isinstance(start, str) or not start:
+                continue
+
+            start_months = NormalizationEngine._date_to_months(start)
+            if start_months is None:
+                continue
+
+            if isinstance(end, str) and end:
+                end_months = NormalizationEngine._date_to_months(end)
+            else:
+                # "present" or missing end — use current date
+                end_months = None
+
+            if end_months is None:
+                # Use a large value representing "now" (~2026-06)
+                from datetime import datetime as _dt
+                now = _dt.now()
+                end_months = now.year * 12 + now.month
+
+            if end_months >= start_months:
+                intervals.append((start_months, end_months))
+
+        if not intervals:
+            return None
+
+        # Sort by start, then merge overlapping
+        intervals.sort()
+        merged: list[tuple[int, int]] = [intervals[0]]
+        for start, end in intervals[1:]:
+            prev_start, prev_end = merged[-1]
+            if start <= prev_end:  # overlapping or adjacent
+                merged[-1] = (prev_start, max(prev_end, end))
+            else:
+                merged.append((start, end))
+
+        # Sum total months across merged ranges
+        total_months = sum(end - start for start, end in merged)
+        return round(total_months / 12.0, 1)
+
+    @staticmethod
+    def _date_to_months(date_str: str) -> Optional[int]:
+        """Convert a YYYY-MM or YYYY string to absolute months since epoch."""
+        import re as _re
+        m = _re.match(r"^(\d{4})-(\d{2})$", date_str.strip())
+        if m:
+            return int(m.group(1)) * 12 + int(m.group(2))
+        m = _re.match(r"^(\d{4})$", date_str.strip())
+        if m:
+            return int(m.group(1)) * 12 + 1  # January of that year
+        return None
 
     # ------------------------------------------------------------------
     # Phones — E.164
@@ -80,6 +235,14 @@ class NormalizationEngine:
     # Skills — lowercase, alias, deduplicate
     # ------------------------------------------------------------------
     def _normalize_skills(self, skills: Any) -> list[dict]:
+        """Normalize skill names (lowercase, alias, dedup) within a single source.
+
+        Within-source deduplication uses *first-occurrence wins*: if the same
+        skill name appears twice in one source record, the first entry is kept.
+        This is acceptable because ambiguity within a single source is rare and
+        arbitrary — the ordering has no confidence signal to differentiate.
+        Cross-source deduplication (in merge_engine) uses highest-confidence wins.
+        """
         if not isinstance(skills, list):
             return []
         seen: set[str] = set()

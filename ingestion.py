@@ -7,17 +7,14 @@ from typing import Any
 from parse_ats_json import parse_ats_json  # noqa: F401
 
 
-def parse_unstructured_notes(filepath: str) -> dict:
-    """Parse a free-form TXT candidate note into a CanonicalProfile-compatible dict."""
-    text = Path(filepath).read_text(encoding="utf-8")
+def parse_unstructured_text(text: str, source: str, candidate_id: str) -> dict:
+    """Core text-parsing logic shared by TXT notes and resume files."""
     profile: dict[str, Any] = {}
     provenance: list[dict[str, str]] = []
-
-    source = "unstructured_notes"
     method = "direct_mapping"
 
-    # ── candidate_id (filename stem as fallback id) ────────────────
-    profile["candidate_id"] = Path(filepath).stem
+    # ── candidate_id ───────────────────────────────────────────────
+    profile["candidate_id"] = candidate_id
     provenance.append({"field": "candidate_id", "source": source, "method": method})
 
     # ── full_name (first non-empty line) ───────────────────────────
@@ -35,8 +32,15 @@ def parse_unstructured_notes(filepath: str) -> dict:
     # ── phone ──────────────────────────────────────────────────────
     phone_match = re.search(r"\+?\d[\d\s.\-()]{7,}\d", text)
     if phone_match:
-        profile["phones"] = [phone_match.group(0).strip()]
-        provenance.append({"field": "phones", "source": source, "method": method})
+        candidate = phone_match.group(0).strip()
+        digit_count = sum(c.isdigit() for c in candidate)
+        # Reject if it looks like a date range or calendar date
+        if (
+            7 <= digit_count <= 15
+            and not re.search(r"\d{4}[-–]\d{2}[-–]\d{2}|\d{4}[-–]\d{2}", candidate)
+        ):
+            profile["phones"] = [candidate]
+            provenance.append({"field": "phones", "source": source, "method": method})
 
     # ── years_experience ──────────────────────────────────────────
     exp_match = re.search(r"(\d+)\+?\s*years?", text, re.IGNORECASE)
@@ -69,7 +73,7 @@ def parse_unstructured_notes(filepath: str) -> dict:
             profile["headline"] = candidate
             provenance.append({"field": "headline", "source": source, "method": method})
 
-    # ── experience lines (lines containing "at" or company-ish patterns) ─
+    # ── experience lines ───────────────────────────────────────────
     experiences: list[dict[str, Any]] = []
     for line in lines[2:]:
         m = re.match(
@@ -91,17 +95,35 @@ def parse_unstructured_notes(filepath: str) -> dict:
         profile["experience"] = experiences
         provenance.append({"field": "experience", "source": source, "method": method})
 
-    # ── confidence ─────────────────────────────────────────────────
-    confidence = 0.50
-    if not profile.get("full_name"):
-        confidence -= 0.10
-    if not profile.get("emails"):
-        confidence -= 0.10
-    if not profile.get("phones"):
-        confidence -= 0.10
-    profile["overall_confidence"] = max(confidence, 0.0)
+    # ── field-level confidence ─────────────────────────────────────
+    # Formula: field_confidence = max(0, source_authority − 0.10 × malformed_attributes)
+    source_authority = 0.50
+    malformed_count = sum([
+        not profile.get("candidate_id"),
+        not profile.get("full_name"),
+        not profile.get("emails"),
+        not profile.get("phones"),
+    ])
+    field_confidence = max(0.0, source_authority - 0.10 * malformed_count)
+
+    for prov in provenance:
+        prov["confidence"] = round(field_confidence, 4)
+
+    # overall_confidence = mean of populated field confidences
+    if provenance:
+        profile["overall_confidence"] = round(
+            sum(p["confidence"] for p in provenance) / len(provenance), 4
+        )
+    else:
+        profile["overall_confidence"] = 0.0
 
     # ── provenance ─────────────────────────────────────────────────
     profile["provenance"] = provenance
 
     return profile
+
+
+def parse_unstructured_notes(filepath: str) -> dict:
+    """Parse a free-form TXT candidate note into a CanonicalProfile-compatible dict."""
+    text = Path(filepath).read_text(encoding="utf-8")
+    return parse_unstructured_text(text, "unstructured_notes", Path(filepath).stem)

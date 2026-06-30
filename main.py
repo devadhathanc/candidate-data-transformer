@@ -1,13 +1,20 @@
+from __future__ import annotations
+
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
 from ingestion import parse_ats_json, parse_unstructured_notes
 from normalization import NormalizationEngine
 from merging import MergeEngine
-from projection import project_profile, ConfigurationError
+from projection import project_profile, validate_projected_output, ConfigurationError, OutputValidationError
 from models import CanonicalProfile
+from resume_parser import parse_resume_file
+from csv_parser import parse_recruiter_csv
+
+logger = logging.getLogger(__name__)
 
 
 def _load_config(path: str) -> dict:
@@ -15,31 +22,35 @@ def _load_config(path: str) -> dict:
         with open(path) as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"Error: config file not found — {path}", file=sys.stderr)
+        logger.error("Config file not found — %s", path)
         sys.exit(1)
     except json.JSONDecodeError as e:
-        print(f"Error: config file is not valid JSON — {e}", file=sys.stderr)
+        logger.error("Config file is not valid JSON — %s", e)
         sys.exit(1)
 
 
-def _route(filepath: str) -> dict | None:
+def _route(filepath: str) -> dict | list[dict] | None:
     path = Path(filepath)
     try:
         if path.suffix == ".json":
             return parse_ats_json(str(path))
         elif path.suffix == ".txt":
             return parse_unstructured_notes(str(path))
+        elif path.suffix == ".csv":
+            return parse_recruiter_csv(str(path))  # returns list[dict]
+        elif path.suffix in (".pdf", ".docx"):
+            return parse_resume_file(str(path))
         else:
-            print(f"Warning: skipping unknown extension '{path.suffix}' — {path.name}", file=sys.stderr)
+            logger.warning("Skipping unknown extension '%s' — %s", path.suffix, path.name)
             return None
     except FileNotFoundError:
-        print(f"Warning: input file not found — {path}", file=sys.stderr)
+        logger.warning("Input file not found — %s", path)
         return None
     except (json.JSONDecodeError, ValueError) as e:
-        print(f"Warning: failed to parse {path.name} — {e}", file=sys.stderr)
+        logger.warning("Failed to parse %s — %s", path.name, e)
         return None
     except Exception as e:
-        print(f"Warning: unexpected error reading {path.name} — {e}", file=sys.stderr)
+        logger.warning("Unexpected error reading %s — %s", path.name, e)
         return None
 
 
@@ -48,15 +59,21 @@ def _validate(profile_dict: dict) -> dict | None:
         validated = CanonicalProfile.model_validate(profile_dict)
         return validated.model_dump()
     except Exception as e:
-        print(
-            f"Warning: schema validation failed for candidate "
-            f"'{profile_dict.get('candidate_id', '?')}' — {e}",
-            file=sys.stderr,
+        logger.warning(
+            "Schema validation failed for candidate '%s' — %s",
+            profile_dict.get("candidate_id", "?"),
+            e,
         )
         return None
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
     parser = argparse.ArgumentParser(
         description="Multi-Source Candidate Data Transformer",
     )
@@ -64,7 +81,7 @@ def main() -> None:
         "--inputs",
         nargs="+",
         required=True,
-        help="One or more candidate data files (.json / .txt)",
+        help="One or more candidate data files (.json / .csv / .txt / .pdf / .docx)",
     )
     parser.add_argument(
         "--config",
@@ -81,10 +98,13 @@ def main() -> None:
     for fp in args.inputs:
         rec = _route(fp)
         if rec is not None:
-            raw_records.append(rec)
+            if isinstance(rec, list):
+                raw_records.extend(r for r in rec if r)
+            else:
+                raw_records.append(rec)
 
     if not raw_records:
-        print("No usable records to process. Exiting.", file=sys.stderr)
+        logger.error("No usable records to process. Exiting.")
         sys.exit(0)
 
     # ── 2. Normalize ───────────────────────────────────────────────
@@ -102,16 +122,25 @@ def main() -> None:
         if v is not None:
             validated.append(v)
 
-    # ── 5. Project ─────────────────────────────────────────────────
+    # ── 5. Project & validate output ────────────────────────────────
     projected: list[dict] = []
     for rec in validated:
         try:
-            projected.append(project_profile(rec, config))
+            result = project_profile(rec, config)
+            validate_projected_output(result, config)
+            projected.append(result)
         except ConfigurationError as e:
-            print(
-                f"Error: invalid projection config for candidate "
-                f"'{rec.get('candidate_id', '?')}' — {e}",
-                file=sys.stderr,
+            logger.error(
+                "Invalid projection config for candidate '%s' — %s",
+                rec.get("candidate_id", "?"),
+                e,
+            )
+            sys.exit(1)
+        except OutputValidationError as e:
+            logger.error(
+                "Post-projection validation failed for candidate '%s' — %s",
+                rec.get("candidate_id", "?"),
+                e,
             )
             sys.exit(1)
 

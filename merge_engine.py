@@ -6,6 +6,8 @@ SOURCE_AUTHORITY: dict[str, float] = {
     "ats_json": 0.95,
     "recruiter_csv": 0.85,
     "unstructured_notes": 0.50,
+    "resume_pdf": 0.50,
+    "resume_docx": 0.50,
 }
 
 
@@ -91,7 +93,7 @@ class MergeEngine:
             if not name:
                 continue
             for exp in rec.get("experience", []):
-                company = (exp.get("company") or "").strip()
+                company = (exp.get("company") or "").strip().lower()
                 if not company:
                     continue
                 name_company_map[(name, company)].append(i)
@@ -144,33 +146,57 @@ class MergeEngine:
         if all_provenance:
             merged["provenance"] = all_provenance
 
-        merged["overall_confidence"] = self._compute_confidence(group_recs)
+        # overall_confidence = mean of the max confidence per unique field
+        merged["overall_confidence"] = self._compute_confidence(all_provenance)
         return merged
 
     # ------------------------------------------------------------------
-    # Conflict resolution — highest authority source wins
+    # Conflict resolution — highest field-level confidence wins
     # ------------------------------------------------------------------
     def _resolve_field(self, field: str, records: list[dict]) -> Any:
+        """Resolve a single-value field across multiple records.
+
+        Uses field-level confidence from provenance (not the authority map)
+        so each field carries the pre-computed penalty for malformed attributes.
+        Ties in confidence are broken by content-based recency.
+        """
         best_value: Any = None
-        best_score = -1.0
+        best_conf = -1.0
+        best_recency: str = ""
         for rec in records:
             val = rec.get(field)
             if val is None:
                 continue
-            source = self._field_source(field, rec)
-            if source is None:
+            conf = self._field_confidence(field, rec)
+            if conf is None:
                 continue
-            score = self.authority.get(source, 0.0)
-            if score > best_score:
-                best_score = score
+            recency = self._latest_experience_end(rec)
+            if conf > best_conf or (conf == best_conf and recency > best_recency):
+                best_conf = conf
                 best_value = val
+                best_recency = recency
         return best_value
 
     @staticmethod
-    def _field_source(field: str, record: dict) -> Optional[str]:
+    def _latest_experience_end(record: dict) -> str:
+        """Return the latest experience.end date string for recency tie-breaking.
+
+        Returns empty string if no dates are found, so records without dates
+        naturally lose ties to records that have them.
+        """
+        latest = ""
+        for exp in record.get("experience", []):
+            end = exp.get("end")
+            if isinstance(end, str) and end > latest:
+                latest = end
+        return latest
+
+    @staticmethod
+    def _field_confidence(field: str, record: dict) -> Optional[float]:
+        """Look up the field-level confidence for *field* from this record's provenance."""
         for prov in record.get("provenance", []):
             if prov.get("field") == field:
-                return prov.get("source")
+                return prov.get("confidence", 0.0)
         return None
 
     # ------------------------------------------------------------------
@@ -178,6 +204,8 @@ class MergeEngine:
     # ------------------------------------------------------------------
     @staticmethod
     def _merge_arrays(records: list[dict], field: str) -> list:
+        if field == "skills":
+            return MergeEngine._merge_skills(records)
         seen: set[str] = set()
         result: list = []
         for rec in records:
@@ -189,29 +217,69 @@ class MergeEngine:
         return result
 
     @staticmethod
+    def _merge_skills(records: list[dict]) -> list[dict]:
+        """Merge skills across records, deduplicating by normalized name.
+
+        Cross-source deduplication uses *highest-confidence wins*: when the same
+        skill appears from multiple sources, the entry with the highest confidence
+        is kept and the sources lists are combined. This is a deliberate design
+        choice — unlike within-source dedup (normalization_engine, first-occurrence)
+        — because cross-source data has meaningful confidence differences that
+        should determine which metadata is authoritative.
+        """
+        best: dict[str, dict] = {}  # normalized_name -> best skill dict
+        for rec in records:
+            for skill in rec.get("skills", []):
+                if not isinstance(skill, dict):
+                    continue
+                name = (skill.get("name") or "").strip().lower()
+                if not name:
+                    continue
+                conf = skill.get("confidence", 0.0)
+                if name not in best or conf > best[name].get("confidence", 0.0):
+                    merged_sources = list(best[name].get("sources", [])) if name in best else []
+                    new_sources = skill.get("sources", [])
+                    combined = list(dict.fromkeys(merged_sources + new_sources))
+                    best[name] = {**skill, "sources": combined}
+                else:
+                    # Lower confidence — just merge sources
+                    existing_sources = best[name].get("sources", [])
+                    new_sources = skill.get("sources", [])
+                    best[name]["sources"] = list(dict.fromkeys(existing_sources + new_sources))
+        return list(best.values())
+
+    @staticmethod
     def _hash_item(item: Any) -> Optional[str]:
         if isinstance(item, dict):
             return str(sorted((k, MergeEngine._hash_item(v)) for k, v in item.items()))
         if isinstance(item, str):
             return item
         return str(item)
+    # ------------------------------------------------------------------
+    # Confidence — mean of max per-field confidences from provenance
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _compute_confidence(all_provenance: list[dict]) -> float:
+        """Compute overall_confidence as the mean of the max confidence per
+        unique field across the merged provenance entries.
 
-    # ------------------------------------------------------------------
-    # Confidence — average of source-authority scores across all fields
-    # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
-    # Confidence — average of decayed source scores, clamped at 0.0
-    # ------------------------------------------------------------------
-    def _compute_confidence(self, group_recs: list[dict]) -> float:
-        if not group_recs:
+        For each field that appears in provenance, we take the *max* confidence
+        across sources (because that represents the winning source's data quality).
+        The overall score is the arithmetic mean across all populated fields.
+        """
+        if not all_provenance:
             return 0.0
-            
-        # Extract the pre-calculated confidence scores from the ingestion layer
-        # (which already correctly applied the -0.10 penalty for malformed attributes)
-        scores = [rec.get("overall_confidence", 0.0) for rec in group_recs]
-        
-        # Calculate the arithmetic mean
-        average_confidence = sum(scores) / len(scores)
-        
-        # Clamp at 0.0 to prevent meaningless negative confidence scores
-        return round(max(0.0, average_confidence), 2)
+
+        # Group by field name, take max confidence per field
+        field_best: dict[str, float] = {}
+        for prov in all_provenance:
+            field = prov.get("field", "")
+            conf = prov.get("confidence", 0.0)
+            if field not in field_best or conf > field_best[field]:
+                field_best[field] = conf
+
+        if not field_best:
+            return 0.0
+
+        mean_conf = sum(field_best.values()) / len(field_best)
+        return round(max(0.0, mean_conf), 4)

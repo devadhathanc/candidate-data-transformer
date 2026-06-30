@@ -128,15 +128,28 @@ def parse_ats_json(json_filepath: str) -> dict:
         profile["education"] = edu_out
         provenance.append({"field": "education", "source": "ats_json", "method": "direct_mapping"})
 
-    # ── confidence ──────────────────────────────────────────────────
-    confidence = 0.95
-    if not profile.get("candidate_id"):
-        confidence -= 0.10
-    if not profile.get("full_name"):
-        confidence -= 0.10
-    if not profile.get("emails"):
-        confidence -= 0.10
-    profile["overall_confidence"] = max(confidence, 0.0)
+    # ── field-level confidence ──────────────────────────────────────
+    # Formula: field_confidence = max(0, source_authority − 0.10 × malformed_attributes)
+    # malformed_attributes = count of missing critical fields in this record.
+    source_authority = 0.95
+    malformed_count = sum([
+        not profile.get("candidate_id"),
+        not profile.get("full_name"),
+        not profile.get("emails"),
+        not profile.get("phones"),
+    ])
+    field_confidence = max(0.0, source_authority - 0.10 * malformed_count)
+
+    for prov in provenance:
+        prov["confidence"] = round(field_confidence, 4)
+
+    # overall_confidence = mean of populated field confidences
+    if provenance:
+        profile["overall_confidence"] = round(
+            sum(p["confidence"] for p in provenance) / len(provenance), 4
+        )
+    else:
+        profile["overall_confidence"] = 0.0
 
     # ── provenance ──────────────────────────────────────────────────
     if provenance:
