@@ -4,9 +4,38 @@ from typing import Any, Optional
 
 SOURCE_AUTHORITY: dict[str, float] = {
     "ats_json": 0.95,
+    "recruiter_csv": 0.85,
     "unstructured_notes": 0.50,
 }
 
+
+# ── DSU / Union-Find ──────────────────────────────────────────────
+
+class UnionFind:
+    """Disjoint Set Union with path compression (no rank needed for this scale)."""
+
+    def __init__(self, n: int):
+        self._parent = list(range(n))
+
+    def find(self, x: int) -> int:
+        while self._parent[x] != x:
+            self._parent[x] = self._parent[self._parent[x]]
+            x = self._parent[x]
+        return x
+
+    def union(self, a: int, b: int) -> None:
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self._parent[rb] = ra
+
+    def groups(self) -> dict[int, list[int]]:
+        g: dict[int, list[int]] = defaultdict(list)
+        for i in range(len(self._parent)):
+            g[self.find(i)].append(i)
+        return g
+
+
+# ── Merge Engine ──────────────────────────────────────────────────
 
 class MergeEngine:
     def __init__(
@@ -22,68 +51,57 @@ class MergeEngine:
         if not records:
             return []
         groups = self._build_groups(records)
-        return [self._merge_group(indices, records) for indices in groups]
+        return [self._merge_group(indices, records) for indices in groups.values()]
 
     # ------------------------------------------------------------------
-    # Match Matrix — group by email → phone → name + company
+    # Graph Construction via DSU (O(N·α(N)))
     # ------------------------------------------------------------------
+    
     @staticmethod
-    def _build_groups(records: list[dict]) -> list[list[int]]:
+    def _build_groups(records: list[dict]) -> dict[int, list[int]]:
         n = len(records)
-        parent = list(range(n))
+        dsu = UnionFind(n)
 
-        def find(x: int) -> int:
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
+        # 1. Primary key — emails
+        email_map: dict[str, list[int]] = defaultdict(list)
+        for i, rec in enumerate(records):
+            for email in rec.get("emails", []):
+                email_map[email].append(i)
+        for indices in email_map.values():
+            if len(indices) > 1:
+                root = indices[0]
+                for idx in indices[1:]:
+                    dsu.union(root, idx)
 
-        def union(a: int, b: int) -> None:
-            ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[rb] = ra
+        # 2. Secondary key — phones
+        phone_map: dict[str, list[int]] = defaultdict(list)
+        for i, rec in enumerate(records):
+            for phone in rec.get("phones", []):
+                phone_map[phone].append(i)
+        for indices in phone_map.values():
+            if len(indices) > 1:
+                root = indices[0]
+                for idx in indices[1:]:
+                    dsu.union(root, idx)
 
-        # Pre-extract identifiers per record
-        emails: list[set[str]] = []
-        phones: list[set[str]] = []
-        names: list[str] = []
-        companies: list[set[str]] = []
-
-        for rec in records:
-            emails.append(set(rec.get("emails", [])))
-            phones.append(set(rec.get("phones", [])))
-            names.append((rec.get("full_name") or "").strip().lower())
-
-            exps = rec.get("experience", [])
-            companies.append(
-                {e.get("company", "") for e in exps if isinstance(e, dict)}
-            )
-
-        for i in range(n):
-            for j in range(i + 1, n):
-                # 1. Shared email
-                if emails[i] and emails[j] and (emails[i] & emails[j]):
-                    union(i, j)
+        # 3. Tertiary key — (lowercased full_name, company) from experience
+        name_company_map: dict[tuple[str, str], list[int]] = defaultdict(list)
+        for i, rec in enumerate(records):
+            name = (rec.get("full_name") or "").strip().lower()
+            if not name:
+                continue
+            for exp in rec.get("experience", []):
+                company = (exp.get("company") or "").strip()
+                if not company:
                     continue
-                # 2. Shared phone
-                if phones[i] and phones[j] and (phones[i] & phones[j]):
-                    union(i, j)
-                    continue
-                # 3. Same name + at least one shared employer
-                if (
-                    names[i]
-                    and names[j]
-                    and names[i] == names[j]
-                    and companies[i]
-                    and companies[j]
-                    and (companies[i] & companies[j])
-                ):
-                    union(i, j)
+                name_company_map[(name, company)].append(i)
+        for indices in name_company_map.values():
+            if len(indices) > 1:
+                root = indices[0]
+                for idx in indices[1:]:
+                    dsu.union(root, idx)
 
-        groups: dict[int, list[int]] = defaultdict(list)
-        for i in range(n):
-            groups[find(i)].append(i)
-        return list(groups.values())
+        return dsu.groups()
 
     # ------------------------------------------------------------------
     # Group merger
@@ -126,7 +144,7 @@ class MergeEngine:
         if all_provenance:
             merged["provenance"] = all_provenance
 
-        merged["overall_confidence"] = self._compute_confidence(all_provenance)
+        merged["overall_confidence"] = self._compute_confidence(group_recs)
         return merged
 
     # ------------------------------------------------------------------
@@ -181,11 +199,19 @@ class MergeEngine:
     # ------------------------------------------------------------------
     # Confidence — average of source-authority scores across all fields
     # ------------------------------------------------------------------
-    def _compute_confidence(self, provenance: list[dict]) -> float:
-        if not provenance:
+    # ------------------------------------------------------------------
+    # Confidence — average of decayed source scores, clamped at 0.0
+    # ------------------------------------------------------------------
+    def _compute_confidence(self, group_recs: list[dict]) -> float:
+        if not group_recs:
             return 0.0
-        scores = [
-            self.authority.get(prov.get("source", ""), 0.0)
-            for prov in provenance
-        ]
-        return sum(scores) / len(scores)
+            
+        # Extract the pre-calculated confidence scores from the ingestion layer
+        # (which already correctly applied the -0.10 penalty for malformed attributes)
+        scores = [rec.get("overall_confidence", 0.0) for rec in group_recs]
+        
+        # Calculate the arithmetic mean
+        average_confidence = sum(scores) / len(scores)
+        
+        # Clamp at 0.0 to prevent meaningless negative confidence scores
+        return round(max(0.0, average_confidence), 2)
