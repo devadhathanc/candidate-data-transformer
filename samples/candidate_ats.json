@@ -1,0 +1,66 @@
+{
+  "CandidateId": "cand-001",
+  "PersonalDetails": {
+    "FirstName": "Alice",
+    "LastName": "Johnson",
+    "Headline": "Senior **Software Engineer** | Cloud & ML"
+  },
+  "Contact": {
+    "PrimaryEmail": "alice.johnson@example.com",
+    "Phone": "+1-555-234-5678",
+    "LinkedIn": "https://linkedin.com/in/alicejohnson",
+    "Github": "https://github.com/alicejohnson",
+    "Portfolio": null,
+    "OtherLinks": ["https://alicejohnson.dev"]
+  },
+  "Location": {
+    "City": "San Francisco",
+    "Region": "California",
+    "Country": "United States"
+  },
+  "Tags": [
+    { "Name": "Python", "Confidence": 0.95, "Sources": ["ats_json"] },
+    { "Name": "AWS", "Confidence": 0.90, "Sources": ["ats_json"] },
+    { "Name": "Machine Learning", "Confidence": 0.85, "Sources": ["ats_json"] },
+    { "Name": "Docker", "Confidence": 0.80, "Sources": ["ats_json"] },
+    { "Name": "ReactJS", "Confidence": 0.70, "Sources": ["ats_json"] }
+  ],
+  "WorkHistory": [
+    {
+      "Company": "TechCorp",
+      "Title": "Senior Software Engineer",
+      "StartDate": "2021-03",
+      "EndDate": "2025-06",
+      "Summary": "Led cloud infrastructure migration to **AWS**. Built ML pipelines."
+    },
+    {
+      "Company": "StartupXYZ",
+      "Title": "Software Engineer",
+      "StartDate": "2018-06",
+      "EndDate": "2021-02",
+      "Summary": "Full-stack development with React and Node.js."
+    },
+    {
+      "Company": "TechCorp",
+      "Title": "Intern",
+      "StartDate": "2020-05",
+      "EndDate": "2020-08",
+      "Summary": "Summer internship — data pipeline prototyping."
+    }
+  ],
+  "Education": [
+    {
+      "Institution": "Stanford University",
+      "Degree": "M.S.",
+      "Field": "Computer Science",
+      "EndYear": "2018"
+    },
+    {
+      "Institution": "UC Berkeley",
+      "Degree": "B.S.",
+      "Field": "Electrical Engineering",
+      "EndYear": "2016"
+    }
+  ],
+  "YearsExperience": 7.0
+}

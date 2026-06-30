@@ -1,0 +1,11 @@
+Alice Johnson
+Senior Software Engineer | Cloud & ML
+Senior SWE at TechCorp (2021-03 – 2025-06)
+Software Engineer at StartupXYZ (2018-06 – 2021-02)
+
+Contact: alice.johnson@example.com | +1 555 234 5678
+
+Skills: Python, AWS, Docker, Kubernetes, Machine Learning, React
+10+ years of combined engineering experience.
+
+Education: Stanford University, M.S. Computer Science, 2018.

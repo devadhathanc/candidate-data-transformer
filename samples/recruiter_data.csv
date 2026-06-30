@@ -1,0 +1,3 @@
+CandidateId,FirstName,LastName,Email,Phone,Headline,City,Region,Country,LinkedIn,Github,Skills,Company,Title,StartDate,EndDate,Institution,Degree,Field,EndYear,YearsExperience
+cand-001,Alice,Johnson,alice.johnson@example.com,+15552345678,Senior SWE,San Francisco,California,United States,https://linkedin.com/in/alicejohnson,,Python;AWS;Docker,TechCorp,Senior Software Engineer,2021-03,2025-06,Stanford University,M.S.,Computer Science,2018,7
+cand-002,Bob,Smith,bob.smith@example.com,+14155551234,Backend Developer,New York,New York,USA,https://linkedin.com/in/bobsmith,https://github.com/bobsmith,Java;Spring;PostgreSQL;K8s,MegaCorp,Backend Engineer,2019-01,2024-12,MIT,B.S.,Computer Science,2018,6

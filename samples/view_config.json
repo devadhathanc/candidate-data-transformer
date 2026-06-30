@@ -1,0 +1,17 @@
+{
+  "fields": [
+    { "path": "name", "from": "full_name", "type": "string" },
+    { "path": "primary_email", "from": "emails[0]", "type": "string", "on_missing": "null" },
+    { "path": "phone", "from": "phones[0]", "type": "string", "on_missing": "omit" },
+    { "path": "title", "from": "headline", "type": "string", "on_missing": "null" },
+    { "path": "city", "from": "location.city", "type": "string", "on_missing": "omit" },
+    { "path": "country", "from": "location.country", "type": "string", "on_missing": "omit" },
+    { "path": "linkedin", "from": "links.linkedin", "type": "string", "on_missing": "omit" },
+    { "path": "github", "from": "links.github", "type": "string", "on_missing": "omit" },
+    { "path": "years_exp", "from": "years_experience", "type": "number" },
+    { "path": "confidence", "from": "overall_confidence", "type": "number" },
+    { "path": "skills", "from": "skills", "type": "array" },
+    { "path": "experience", "from": "experience", "type": "array" },
+    { "path": "education", "from": "education", "type": "array" }
+  ]
+}
