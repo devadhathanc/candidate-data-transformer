@@ -72,8 +72,8 @@ python -m pytest tests/test_pipeline.py -v
 ├── requirements.txt         # Python dependencies
 ├── samples/                 # Sample input data & config
 │   ├── candidate_ats.json
-│   ├── resume_alice.pdf
+│   ├── resume.pdf
 │   └── view_config.json
 └── tests/
-    └── test_pipeline.py     # 44 pytest tests
+    └── test_pipeline.py     # 54 pytest tests
 ```

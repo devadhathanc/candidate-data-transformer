@@ -72,11 +72,11 @@ def parse_resume_file(filepath: str) -> dict:
 
     if suffix not in (".pdf", ".docx"):
         logger.warning("Unsupported resume extension '%s' — %s", suffix, path.name)
-        return {}
+        return None
 
     raw_text = extract_text_from_file(filepath)
     if not raw_text:
-        return {}
+        return None
 
     source = "resume_pdf" if suffix == ".pdf" else "resume_docx"
     return parse_unstructured_text(raw_text, source, path.stem)
