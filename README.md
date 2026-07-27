@@ -4,6 +4,12 @@ A linear pipeline that ingests candidate data from multiple heterogeneous source
 normalizes formats, resolves entity matches, merges conflicting fields, and projects
 the result into a configurable output shape.
 
+## 🚀 Live Demo
+
+- **Web Dashboard (Vercel)**: [https://candidate-data-transformer-rho.vercel.app/](https://candidate-data-transformer-rho.vercel.app/)
+- **Backend API (Render)**: [https://candidate-data-transformer-fo36.onrender.com](https://candidate-data-transformer-fo36.onrender.com)
+
+
 ## Architecture
 
 ```
