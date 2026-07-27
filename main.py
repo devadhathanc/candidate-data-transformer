@@ -78,17 +78,43 @@ def main() -> None:
         description="Multi-Source Candidate Data Transformer",
     )
     parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Launch the Web Application server UI",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host address for web server (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port for web server (default: 8000)",
+    )
+    parser.add_argument(
         "--inputs",
         nargs="+",
-        required=True,
+        required=False,
         help="One or more candidate data files (.json / .csv / .txt / .pdf / .docx)",
     )
     parser.add_argument(
         "--config",
-        required=True,
+        required=False,
         help="Projection configuration file (JSON)",
     )
     args = parser.parse_args()
+
+    if args.web:
+        import uvicorn
+        logger.info("Starting Web Application at http://%s:%d", args.host, args.port)
+        uvicorn.run("app:app", host=args.host, port=args.port, reload=True)
+        return
+
+    if not args.inputs or not args.config:
+        parser.error("--inputs and --config are required when --web is not specified.")
+
 
     # ── 0. Load projection config ──────────────────────────────────
     config = _load_config(args.config)

@@ -1,0 +1,64 @@
+Technical Design: Multi-Source Candidate Data Transformer
+Eightfold Engineering Intern (Jul–Dec 2026) · Stage 1 Design Document
+1. Architecture & Pipeline Breakdown
+The system uses a linear pipeline with isolated stages to process, merge, and reshape candidate data.
+[Ingestion/Parsing] → [Normalization] → [Entity Resolution & Merging] → [Projection Layer] → [Validation]
+● Step 1 — Ingest & Parse: Structured sources (Recruiter CSV / ATS JSON) are parsed via native libraries; structural mismatches map to raw intermediate
+keys. Unstructured sources (Recruiter Notes / Resume Text) are processed using regex heuristics and token matchers to isolate key-value blocks.
+● Step 2 — Normalize: Formats raw inputs into strict target types. Phones → E.164; locations → ISO-3166 alpha-2; dates → YYYY-MM. Missing or
+unparseable fields are explicitly initialized as null.
+● Step 3 — Entity Resolution & Merging: Groups source records using a deterministic multi-key matching matrix. Conflicts are broken via a source authority
+hierarchy, compiling provenance metadata arrays along the way.
+● Step 4 — Projection Layer: A pure function project(CanonicalRecord, Config) -> CustomJSON that reshapes the internal record according to runtime config
+keys.
+● Step 5 — Output Validation: Validates the projected output against the config's structural rules before final JSON serialization.
+2. Canonical Schema Definition & Normalization Rules
+The internal master record enforces maximum data fidelity and matches the required schema.
+Data shapes:
+● emails, phones — arrays of strings.
+● location — object { city, region, country }.
+● links — strict object { linkedin: string|null, github: string|null, portfolio: string|null, other: string[] }.
+Field-level normalization policies:
+● Phones: Standardized via ^\+?[1-9]\d{1,14}$.
+● Skills: Lowercased, stripped of whitespace, mapped via a local synonym dictionary (e.g., "JS", "Javascript" → "JavaScript").
+● years_experience: Calculated by first merging overlapping experience date intervals into continuous union ranges (to avoid double-counting concurrent
+roles), then summing total duration across the merged ranges.
+● headline / education / experience: Strings stripped of markdown/escaped characters; dates truncated to YYYY-MM.
+3. Merge Policy & Confidence Scoring
+Multi-key entity resolution (match criteria): A tier-based deterministic match matrix handles unstructured profiles missing emails. Two records merge if they
+share:
+● Primary key: Any matching string in the emails array.
+● Secondary key (fallback): Exact match on normalized_phone.
+● Tertiary key (fallback): Exact match on full_name AND a matching employer/company name within their experience arrays.
+If no keys match, a new canonical candidate profile is initialized.
+Conflict resolution & provenance: Tie-breaking relies on a strict Source Authority Hierarchy:
+ATS JSON (0.95) > Recruiter CSV (0.85) > LinkedIn/GitHub URL (0.75) > Unstructured Notes/Resumes (0.50)
+Every field tracks its origin in a metadata map: [{ field: "headline", source: "linkedin_url", method: "direct_mapping" }]. If two sources have equal authority, the tie
+breaks via a content-based recency signal: the source containing the latest experience.end date wins. If neither source has dates, it falls back to file-metadata
+modification timestamp.
+Confidence scoring: overall_confidence is the arithmetic mean of all populated fields' individual confidence scores. An individual field's confidence is calculated
+using an additive decay formula based on source authority, clamped at zero:
+Field Confidence = max(0, Source Authority − (0.10 × Malformed Attributes))
+4. Projection Layer (The Twist)
+The projection engine operates strictly as a pure function.
+● Remapping: Resolves path strings (e.g., "emails[0]" via JSON pointer resolution) and assigns them to newly designated target keys.
+● Missing value & invalid path strategy: Evaluates the runtime on_missing rule from the config — null: leaves an explicit null token; omit: deletes the key
+entirely; error: throws a hard validation exception, halting execution.
+● Invalid configuration paths or schema references immediately trigger the error state, to preserve transparency and prevent silent profile corruption.
+5. Edge Cases & Strategic Descoping
+Critical edge cases handled:
+● Circular/Conflicting Merges: If Source A links Email 1 and Phone 1, and Source B links Phone 1 and Email 2, the pipeline treats these as a single
+connected graph component, merging all inputs into one canonical ID.
+● Malformed/Garbage Input: Empty notes or unparseable blocks gracefully produce an empty intermediate payload without crashing, assigning an
+overall_confidence score of 0.0.
+● Equal-Authority Conflicts: If two Recruiter CSVs contain conflicting titles for the same candidate, the tie breaks via content-based recency (latest
+experience.end), falling back to file metadata timestamps.
+● Skill Synonym Aliasing: Merges variants like "React.js", "ReactJS", and "React" into a single canonical skill entity ("React") using a seed taxonomy map.
+● Config Field Collision: If a custom config maps two different canonical fields to the same output key, the projection layer throws a compile-time
+configuration error.
+Known limitations:
+Tertiary Match Key Tradeoff (Precision vs. Recall): The fallback match key (full_name + employer) carries a known false-merge risk for candidates with highly
+common names at large enterprise companies. Given the constraint of missing emails, this is a deliberate design choice favoring recall (merging fragmented
+profiles) over strict precision.
+Descoping under time pressure: Out of scope — multi-threaded pipeline execution, external database engine persistence (fully in-memory data structures), and
+advanced CLI visualization libraries (raw JSON string logging only).

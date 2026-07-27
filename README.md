@@ -25,16 +25,22 @@ the result into a configurable output shape.
 pip install -r requirements.txt
 ```
 
-### Run the pipeline
+### Run Web UI Dashboard
+```bash
+python main.py --web
+```
+Access the application at `http://localhost:8000`.
+
+### Run CLI pipeline
 ```bash
 python main.py \
-  --inputs samples/candidate_ats.json samples/resume_alice.pdf \
+  --inputs samples/candidate_ats.json samples/resume.pdf \
   --config samples/view_config.json
 ```
 
 ### Run tests
 ```bash
-python -m pytest tests/test_pipeline.py -v
+python -m pytest -v
 ```
 
 ## Pipeline Stages
